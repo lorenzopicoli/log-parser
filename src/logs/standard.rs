@@ -1,13 +1,15 @@
+use crate::logs::FormattedLog;
+use crate::logs::ParsableLog;
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::skip_serializing_none;
-use sqlformat::{Indent, QueryParams};
-use termcolor::Color;
 
-use crate::core::{FormattedLog, ParsableLog};
+fn default_none<T>() -> Option<T> {
+    None
+}
 
 /// Represents the internal data part of a standard log
 /// This is the trickiest part of the log. It can contain virtually anything
@@ -20,6 +22,8 @@ struct InternalDataLog {
     internal_context: Option<HashMap<String, Value>>,
     context: HashMap<String, Value>,
     status_code: Option<i32>,
+    name: Option<String>,
+    http_code: Option<i32>,
     err: Option<HashMap<String, Value>>,
     req: Option<HashMap<String, Value>>,
     body: Option<HashMap<String, Value>>,
@@ -58,7 +62,7 @@ struct StringObjLog {
 #[skip_serializing_none]
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct StandardLog {
+pub struct StandardLog {
     level: u8,
     // In ms
     time: Option<u64>,
@@ -103,12 +107,23 @@ impl ParsableLog for StandardLog {
 
         let mut log = "".to_string();
         let mut extra: Option<HashMap<String, Value>> = None;
+
+        if let Some(data) = &self.data {
+            if let Some(name) = &data.name {
+                log.push_str(&format!(" - Responding with error {}", name));
+            }
+        }
+        if let Some(data) = &self.data {
+            if let Some(http_code) = &data.http_code {
+                log.push_str(&format!(" - HTTP code {}", http_code));
+            }
+        }
         if let Some(url) = url {
-            log.push_str(url.as_str().unwrap_or(""));
+            log.push_str(&format!(" - {}", url.as_str().unwrap_or("")));
         }
 
         if let Some(msg) = &self.msg {
-            log.push_str(&msg);
+            log.push_str(&format!(" - {}", msg));
         }
 
         if let Some(msg) = &self.msg_obj {
@@ -156,12 +171,23 @@ impl ParsableLog for StandardLog {
 
         let mut log = "".to_string();
         let mut extra: HashMap<String, Value> = HashMap::new();
+
+        if let Some(data) = &self.data {
+            if let Some(name) = &data.name {
+                log.push_str(&format!(" - Responding with error {}", name));
+            }
+        }
+        if let Some(data) = &self.data {
+            if let Some(http_code) = &data.http_code {
+                log.push_str(&format!(" - HTTP code {}", http_code));
+            }
+        }
         if let Some(url) = url {
-            log.push_str(url.as_str().unwrap_or(""));
+            log.push_str(&format!(" - {}", url.as_str().unwrap_or("")));
         }
 
         if let Some(msg) = &self.msg {
-            log.push_str(&msg);
+            log.push_str(&format!(" - {}", msg));
         }
 
         if let Some(msg) = &self.msg_obj {
@@ -234,91 +260,5 @@ impl ParsableLog for StandardLog {
                 None
             }
         }
-    }
-}
-
-fn default_none<T>() -> Option<T> {
-    None
-}
-
-#[skip_serializing_none]
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct KnexLog {
-    sql: String,
-    bindings: Option<Value>,
-}
-impl ParsableLog for KnexLog {
-    fn format_compact(&self) -> FormattedLog {
-        let time = Local::now();
-        let bindings = self
-            .bindings
-            .clone()
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| {
-                if x.is_string() {
-                    format!("'{}'", x.as_str().unwrap().to_string())
-                } else {
-                    x.to_string()
-                }
-            })
-            .collect();
-        let qs = QueryParams::Indexed(bindings);
-        let msg = sqlformat::format(
-            &self.sql.clone(),
-            &qs,
-            sqlformat::FormatOptions {
-                indent: Indent::Spaces(2),
-                uppercase: true,
-                lines_between_queries: 0,
-            },
-        );
-        FormattedLog {
-            date: time,
-            msg: format!(
-                "SQL query (might be different than the actual query):\n{}",
-                msg
-            ),
-            extra: None,
-            color_overwrite: Some(Color::Yellow),
-        }
-    }
-
-    fn from_line(line: &str) -> Option<Self> {
-        match serde_json::from_str::<KnexLog>(&line) {
-            Ok(r) => Some(r),
-            Err(_e) => {
-                // println!("ERRRRRR {}", e);
-                None
-            }
-        }
-    }
-
-    fn format_detailed(&self) -> FormattedLog {
-        let time = Local::now();
-        let msg = self.sql.clone();
-        let mut bindings_map: HashMap<String, Value> = HashMap::new();
-        if let Some(b) = &self.bindings {
-            bindings_map.insert("bidings".to_string(), b.clone());
-        }
-        FormattedLog {
-            date: time,
-            msg,
-            extra: Some(bindings_map),
-            color_overwrite: Some(Color::Blue),
-        }
-    }
-}
-
-pub fn try_parse_known_log(line: &str) -> Option<Box<dyn ParsableLog>> {
-    if let Some(v) = StandardLog::from_line(line) {
-        Some(Box::new(v))
-    } else if let Some(v) = KnexLog::from_line(line) {
-        Some(Box::new(v))
-    } else {
-        None
     }
 }
